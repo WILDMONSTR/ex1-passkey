@@ -14,6 +14,7 @@ import {
   ChevronRight,
 } from 'lucide-react';
 import { PHOTO_FALLBACKS } from './photoFallbacks';
+import { PasskeyPortal } from './PasskeyPortal';
 
 type Hobby = {
   icon: typeof Cookie;
@@ -277,6 +278,9 @@ function App() {
           <p className="text-sm text-stone-600 max-w-xl mx-auto">
             타인에게 내 취미가 무엇인지 소개하기 위한 웹사이트
           </p>
+          <a href="#passkey-gate" className="mt-3 inline-flex items-center gap-2 rounded-full border border-stone-300 bg-white px-4 py-2 text-xs font-semibold text-stone-700 shadow-sm transition hover:border-stone-500 hover:bg-stone-50">
+            🔒 비공개 영역 · 패스키 등록/로그인
+          </a>
         </div>
       </header>
 
@@ -487,6 +491,7 @@ function App() {
       )}
 
       <Footer />
+      <PasskeyPortal />
     </div>
   );
 }
