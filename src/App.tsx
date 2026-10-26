@@ -402,7 +402,7 @@ function App() {
           <span>사진 근거</span>
           <span className="text-xs text-stone-600">(탭으로 이동, 방향키로 탐색, Enter로 확대)</span>
         </div>
-        <div className="columns-2 sm:columns-3 lg:columns-5 gap-3 sm:gap-4">
+        <div className="flex flex-wrap justify-around gap-x-3 gap-y-3">
           {allPhotos.map((item, idx) => (
             <button
               key={idx}
@@ -411,14 +411,14 @@ function App() {
               onClick={(e) => openLightbox(idx, e.currentTarget)}
               onKeyDown={(e) => handlePhotoGridKeyDown(e, idx)}
               aria-label={`${item.title} 사진 ${item.index + 1}, 확대해서 보기`}
-              className={`relative inline-block w-full mb-3 sm:mb-4 break-inside-avoid rounded-lg overflow-hidden group cursor-pointer ring-1 ring-stone-200 outline-none focus-visible:ring-2 ${item.color.focusRing} focus-visible:ring-offset-2`}
+              className={`relative block w-[calc(50%-0.375rem)] min-[630px]:w-[180px] max-w-[180px] aspect-[4/3] rounded-lg overflow-hidden group cursor-pointer ring-1 ring-stone-200 outline-none focus-visible:ring-2 ${item.color.focusRing} focus-visible:ring-offset-2`}
             >
               <img
                 src={item.photo}
                 onError={handlePhotoError(idx)}
                 alt={`${item.title} 사진 ${item.index + 1}`}
                 loading="lazy"
-                className="block w-full h-auto object-contain bg-stone-100"
+                className="absolute inset-0 w-full h-full object-cover bg-stone-100"
               />
               <div className="absolute inset-0 bg-gradient-to-t from-black/50 to-transparent opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100 transition-opacity" />
               <div className="absolute bottom-2 left-2 text-xs font-medium opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100 transition-opacity">
