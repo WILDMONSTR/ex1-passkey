@@ -160,13 +160,50 @@ function App() {
     lastTriggerRef.current?.focus();
   };
 
-  // 사진 그리드: 좌/우/상/하 방향키로 다음/이전 사진에 포커스 이동 (roving tabindex 패턴)
+  // 사진 배치가 원본 비율 기반이므로, 방향키는 화면상 가장 가까운 사진으로 이동합니다.
   const handlePhotoGridKeyDown = (e: React.KeyboardEvent<HTMLButtonElement>, idx: number) => {
     let nextIdx: number | null = null;
-    if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
-      nextIdx = (idx + 1) % allPhotos.length;
-    } else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') {
-      nextIdx = (idx - 1 + allPhotos.length) % allPhotos.length;
+    if (['ArrowRight', 'ArrowLeft', 'ArrowUp', 'ArrowDown'].includes(e.key)) {
+      e.preventDefault();
+      const current = photoRefs.current[idx];
+      const currentRect = current?.getBoundingClientRect();
+
+      if (currentRect) {
+        const currentX = currentRect.left + currentRect.width / 2;
+        const currentY = currentRect.top + currentRect.height / 2;
+        const candidates = photoRefs.current.flatMap((el, candidateIdx) => {
+          if (!el || candidateIdx === idx) return [];
+          const rect = el.getBoundingClientRect();
+          const dx = rect.left + rect.width / 2 - currentX;
+          const dy = rect.top + rect.height / 2 - currentY;
+          let primaryDistance: number;
+          let secondaryDistance: number;
+
+          if (e.key === 'ArrowRight' && dx > 1) {
+            primaryDistance = dx;
+            secondaryDistance = Math.abs(dy);
+          } else if (e.key === 'ArrowLeft' && dx < -1) {
+            primaryDistance = Math.abs(dx);
+            secondaryDistance = Math.abs(dy);
+          } else if (e.key === 'ArrowDown' && dy > 1) {
+            primaryDistance = dy;
+            secondaryDistance = Math.abs(dx);
+          } else if (e.key === 'ArrowUp' && dy < -1) {
+            primaryDistance = Math.abs(dy);
+            secondaryDistance = Math.abs(dx);
+          } else {
+            return [];
+          }
+
+          return [{ idx: candidateIdx, score: primaryDistance + secondaryDistance * 1.5 }];
+        }).sort((a, b) => a.score - b.score);
+
+        nextIdx = candidates[0]?.idx ?? (
+          e.key === 'ArrowRight' || e.key === 'ArrowDown'
+            ? (idx + 1) % allPhotos.length
+            : (idx - 1 + allPhotos.length) % allPhotos.length
+        );
+      }
     } else if (e.key === 'Home') {
       nextIdx = 0;
     } else if (e.key === 'End') {
@@ -275,8 +312,9 @@ function App() {
               <div
                 key={i}
                 tabIndex={0}
+                role="group"
                 aria-label={`${hobby.title}: ${hobby.desc}`}
-                className={`group bg-white rounded-xl p-3.5 shadow-sm ring-1 ${c.ring} transition-all duration-300 hover:shadow-md hover:-translate-y-0.5 cursor-default outline-none focus-visible:ring-2 ${c.focusRing} focus-visible:shadow-md focus-visible:-translate-y-0.5`}
+                className={`group bg-white rounded-xl p-3.5 shadow-sm ring-1 ${c.ring} transition-all duration-300 hover:shadow-md hover:-translate-y-0.5 cursor-pointer outline-none focus-visible:ring-2 ${c.focusRing} focus-visible:shadow-md focus-visible:-translate-y-0.5`}
               >
                 <div className="flex items-center gap-2.5 mb-1.5">
                   <div className={`w-9 h-9 rounded-lg ${c.bg} ${c.hover} group-focus-visible:bg-opacity-100 flex items-center justify-center transition-colors duration-300 flex-shrink-0`}>
@@ -305,8 +343,9 @@ function App() {
               <div
                 key={card.id}
                 tabIndex={0}
+                role="group"
                 aria-label={`${card.title}. 상황: ${card.situation} 행동: ${card.action} 결과: ${card.result}`}
-                className={`bg-white rounded-xl shadow-sm ring-1 ring-stone-200 overflow-hidden transition-shadow duration-300 hover:shadow-md outline-none focus-visible:ring-2 ${c.focusRing} focus-visible:shadow-md`}
+                className={`bg-white rounded-xl shadow-sm ring-1 ring-stone-200 overflow-hidden transition-shadow duration-300 hover:shadow-md cursor-pointer outline-none focus-visible:ring-2 ${c.focusRing} focus-visible:shadow-md`}
               >
                 <div className="flex flex-col lg:flex-row">
                   {/* Card title */}
@@ -363,7 +402,7 @@ function App() {
           <span>사진 근거</span>
           <span className="text-xs text-stone-600">(탭으로 이동, 방향키로 탐색, Enter로 확대)</span>
         </div>
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 sm:gap-4">
+        <div className="columns-2 sm:columns-3 lg:columns-5 gap-3 sm:gap-4">
           {allPhotos.map((item, idx) => (
             <button
               key={idx}
@@ -372,14 +411,14 @@ function App() {
               onClick={(e) => openLightbox(idx, e.currentTarget)}
               onKeyDown={(e) => handlePhotoGridKeyDown(e, idx)}
               aria-label={`${item.title} 사진 ${item.index + 1}, 확대해서 보기`}
-              className={`relative aspect-square rounded-lg overflow-hidden group cursor-pointer ring-1 ring-stone-200 outline-none focus-visible:ring-2 ${item.color.focusRing} focus-visible:ring-offset-2`}
+              className={`relative inline-block w-full mb-3 sm:mb-4 break-inside-avoid rounded-lg overflow-hidden group cursor-pointer ring-1 ring-stone-200 outline-none focus-visible:ring-2 ${item.color.focusRing} focus-visible:ring-offset-2`}
             >
               <img
                 src={item.photo}
                 onError={handlePhotoError(idx)}
                 alt={`${item.title} 사진 ${item.index + 1}`}
                 loading="lazy"
-                className="w-full h-full object-cover group-hover:object-contain group-focus-visible:object-contain bg-stone-100"
+                className="block w-full h-auto object-contain bg-stone-100"
               />
               <div className="absolute inset-0 bg-gradient-to-t from-black/50 to-transparent opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100 transition-opacity" />
               <div className="absolute bottom-2 left-2 text-xs font-medium opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100 transition-opacity">
@@ -467,7 +506,12 @@ function VisibilityPanel({
 }) {
   const isPublic = tone === 'public';
   return (
-    <div className={`rounded-xl px-4 py-2.5 ${isPublic ? 'bg-emerald-50 ring-1 ring-emerald-200' : 'bg-stone-100 ring-1 ring-stone-200'}`}>
+    <div
+      tabIndex={0}
+      role="group"
+      aria-label={`${title}: ${items.join(', ')}`}
+      className={`rounded-xl px-4 py-2.5 cursor-pointer transition-shadow duration-300 hover:shadow-sm outline-none focus-visible:ring-2 focus-visible:ring-stone-400 focus-visible:ring-offset-2 ${isPublic ? 'bg-emerald-50 ring-1 ring-emerald-200' : 'bg-stone-100 ring-1 ring-stone-200'}`}
+    >
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
         <h2 className={`text-sm font-bold ${isPublic ? 'text-emerald-800' : 'text-stone-700'}`}>{title}</h2>
         <span className={`text-xs ${isPublic ? 'text-emerald-700' : 'text-stone-600'}`}>{description}</span>
