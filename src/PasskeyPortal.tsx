@@ -200,7 +200,34 @@ export function PasskeyPortal() {
       // pending state에서는 이 호출까지 await 네트워크 요청을 하지 않으므로
       // 사용자의 다음 클릭이 즉시 브라우저 패스키 창에 전달됩니다.
       browserPromptStarted = true;
-      const credential = await navigator.credentials.create({ publicKey: activeRegistration.publicKey });
+      let credential: Credential | null;
+      try {
+        credential = await navigator.credentials.create({ publicKey: activeRegistration.publicKey });
+      } catch (browserError) {
+        // Report only allowlisted, non-identifying diagnostic values. Never send the error message or credential data.
+        let platformAuthenticatorAvailable: boolean | null = null;
+        try {
+          if (typeof PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable === 'function') {
+            platformAuthenticatorAvailable = await PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable();
+          }
+        } catch { /* diagnostics must not mask the original registration error */ }
+        const creationOptions = activeRegistration.publicKey as PublicKeyCredentialCreationOptions & { hints?: string[] };
+        const errorName = browserError instanceof Error ? browserError.name : 'Other';
+        try {
+          await api('browser-diagnostic', {
+            errorName,
+            selectedLocation: savedLocation,
+            authenticatorAttachment: creationOptions.authenticatorSelection?.authenticatorAttachment ?? 'unset',
+            residentKey: creationOptions.authenticatorSelection?.residentKey ?? 'unset',
+            userVerification: creationOptions.authenticatorSelection?.userVerification ?? 'unset',
+            hints: Array.isArray(creationOptions.hints) ? creationOptions.hints : [],
+            isSecureContext: window.isSecureContext,
+            credentialsApiAvailable: Boolean(navigator.credentials && window.PublicKeyCredential),
+            platformAuthenticatorAvailable,
+          });
+        } catch { /* reporting failure must not mask the original registration error */ }
+        throw browserError;
+      }
       if (!(credential instanceof PublicKeyCredential)) throw new Error('브라우저에서 패스키 등록이 완료되지 않았어요.');
 
       await api('register-verify', {
