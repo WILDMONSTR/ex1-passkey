@@ -25,6 +25,11 @@ type AuditEvent = {
   created_at: string;
 };
 
+type PendingRegistration = {
+  challenge: string;
+  publicKey: PublicKeyCredentialCreationOptions;
+};
+
 function toBase64Url(buffer: ArrayBuffer | Uint8Array): string {
   const bytes = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
   let binary = '';
@@ -121,6 +126,7 @@ export function PasskeyPortal() {
   const [passkeys, setPasskeys] = useState<Passkey[]>([]);
   const [items, setItems] = useState<PrivateItem[]>([]);
   const [events, setEvents] = useState<AuditEvent[]>([]);
+  const [pendingRegistration, setPendingRegistration] = useState<PendingRegistration | null>(null);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
   const [messageKind, setMessageKind] = useState<'info' | 'error' | 'success'>('info');
@@ -160,42 +166,69 @@ export function PasskeyPortal() {
   async function registerPasskey() {
     setBusy(true);
     setMessage('');
-    let challenge = '';
+    let activeRegistration: PendingRegistration | null = pendingRegistration;
     let browserPromptStarted = false;
     try {
       if (!window.isSecureContext || !navigator.credentials || !window.PublicKeyCredential) {
         throw new Error('이 브라우저에서 패스키를 사용할 수 없어요. HTTPS 공식 배포 주소와 최신 브라우저를 사용하세요.');
       }
-      const optionsResult = await api('register-options', { username: registerUsername.trim(), savedLocation });
-      challenge = String(optionsResult.challenge || '');
-      const options = optionsResult.options;
-      const publicKey: PublicKeyCredentialCreationOptions = {
-        ...options,
-        challenge: fromBase64Url(options.challenge),
-        user: { ...options.user, id: fromBase64Url(options.user.id) },
-        excludeCredentials: (options.excludeCredentials || []).map((item: { id: string; type: PublicKeyCredentialType; transports?: AuthenticatorTransport[] }) => ({
-          ...item,
-          id: fromBase64Url(item.id),
-        })),
-      };
+
+      // 첫 클릭에서는 서버 challenge/options를 준비합니다.
+      // 포커스 오류가 나면 다음 클릭에서 네트워크 대기 없이 브라우저 인증기를 바로 호출합니다.
+      if (!activeRegistration) {
+        const optionsResult = await api('register-options', { username: registerUsername.trim(), savedLocation });
+        const publicKeyOptions = optionsResult.options;
+        const publicKey: PublicKeyCredentialCreationOptions = {
+          ...publicKeyOptions,
+          challenge: fromBase64Url(publicKeyOptions.challenge),
+          user: { ...publicKeyOptions.user, id: fromBase64Url(publicKeyOptions.user.id) },
+          excludeCredentials: (publicKeyOptions.excludeCredentials || []).map((item: { id: string; type: PublicKeyCredentialType; transports?: AuthenticatorTransport[] }) => ({
+            ...item,
+            id: fromBase64Url(item.id),
+          })),
+        };
+        activeRegistration = { challenge: String(optionsResult.challenge || ''), publicKey };
+        setPendingRegistration(activeRegistration);
+      }
+
+      if (!document.hasFocus()) {
+        setMessage('패스키 등록 준비가 완료됐어요. Chrome 창과 이 탭을 활성화한 뒤 아래의 “패스키 생성 계속” 버튼을 눌러 주세요.');
+        setMessageKind('info');
+        return;
+      }
+
+      // pending state에서는 이 호출까지 await 네트워크 요청을 하지 않으므로
+      // 사용자의 다음 클릭이 즉시 브라우저 패스키 창에 전달됩니다.
       browserPromptStarted = true;
-      const credential = await navigator.credentials.create({ publicKey });
+      const credential = await navigator.credentials.create({ publicKey: activeRegistration.publicKey });
       if (!(credential instanceof PublicKeyCredential)) throw new Error('브라우저에서 패스키 등록이 완료되지 않았어요.');
+
       await api('register-verify', {
-        challenge,
+        challenge: activeRegistration.challenge,
         credential: registrationCredentialJSON(credential),
         name: passkeyName.trim() || '내 패스키',
         savedLocation,
       });
+      setPendingRegistration(null);
       setLoginUsername(registerUsername.trim());
       setMessage('패스키 등록이 완료됐어요. 아래의 기존 계정 로그인 영역에서 같은 계정 이름으로 로그인해 비공개 자료를 확인하세요.');
       setMessageKind('success');
     } catch (error) {
-      if (challenge && browserPromptStarted) {
-        try { await api('register-cancel', { challenge }); } catch { /* 검증 단계에서 이미 사용된 challenge일 수 있음 */ }
+      const messageText = errorMessage(error);
+      const focusError = /does not have focus|page does not have focus/i.test(messageText);
+      if (activeRegistration && focusError) {
+        // challenge/options를 보존해 다음 클릭에서 네트워크 대기 없이 재시도합니다.
+        setPendingRegistration(activeRegistration);
+        setMessage('Chrome이 페이지 포커스를 잃어 패스키 창을 열지 못했어요. 이 웹페이지를 활성화한 뒤 “패스키 생성 계속”을 한 번 더 눌러 주세요.');
+        setMessageKind('error');
+      } else {
+        if (activeRegistration && browserPromptStarted) {
+          try { await api('register-cancel', { challenge: activeRegistration.challenge }); } catch { /* challenge가 이미 사용되었을 수 있음 */ }
+        }
+        setPendingRegistration(null);
+        setMessage(messageText);
+        setMessageKind('error');
       }
-      setMessage(errorMessage(error));
-      setMessageKind('error');
     } finally {
       setBusy(false);
     }
@@ -305,18 +338,18 @@ export function PasskeyPortal() {
                 </div>
               </div>
               <label className="mb-1 block text-sm font-medium text-stone-700" htmlFor="register-username">새 계정 이름</label>
-              <input id="register-username" autoComplete="username" value={registerUsername} onChange={(e) => setRegisterUsername(e.target.value)} maxLength={32} placeholder="예: student_a" className="mb-3 w-full rounded-lg border border-stone-300 px-3 py-2.5 text-sm outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100" />
+              <input id="register-username" autoComplete="username" disabled={busy || !!pendingRegistration} value={registerUsername} onChange={(e) => setRegisterUsername(e.target.value)} maxLength={32} placeholder="예: student_a" className="mb-3 w-full rounded-lg border border-stone-300 px-3 py-2.5 text-sm outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100" />
               <label className="mb-1 block text-sm font-medium text-stone-700" htmlFor="passkey-name">패스키 이름</label>
-              <input id="passkey-name" value={passkeyName} onChange={(e) => setPasskeyName(e.target.value)} maxLength={80} placeholder="예: 내 노트북" className="mb-3 w-full rounded-lg border border-stone-300 px-3 py-2.5 text-sm outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100" />
+              <input id="passkey-name" disabled={busy || !!pendingRegistration} value={passkeyName} onChange={(e) => setPasskeyName(e.target.value)} maxLength={80} placeholder="예: 내 노트북" className="mb-3 w-full rounded-lg border border-stone-300 px-3 py-2.5 text-sm outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100" />
               <label className="mb-1 block text-sm font-medium text-stone-700" htmlFor="saved-location">패스키 등록 방식(선택)</label>
-              <select id="saved-location" value={savedLocation} onChange={(e) => setSavedLocation(e.target.value)} className="mb-4 w-full rounded-lg border border-stone-300 bg-white px-3 py-2.5 text-sm outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100">
+              <select id="saved-location" disabled={busy || !!pendingRegistration} value={savedLocation} onChange={(e) => setSavedLocation(e.target.value)} className="mb-4 w-full rounded-lg border border-stone-300 bg-white px-3 py-2.5 text-sm outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100">
                 <option value="google-password-manager">Google 비밀번호 관리자 (Chrome)</option>
                 <option value="device">이 기기 (Windows Hello 등)</option>
                 <option value="security-key">외장 USB 보안 키</option>
                 <option value="unknown">잘 모르겠어요 (이 기기 우선)</option>
               </select>
               <button type="button" disabled={busy || registerUsername.trim().length < 3} onClick={() => void registerPasskey()} className="w-full rounded-lg bg-emerald-700 px-4 py-3 text-sm font-bold text-white transition hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-50">
-                {busy ? '처리 중…' : '패스키 등록 시작'}
+                {busy ? '처리 중…' : pendingRegistration ? '패스키 생성 계속' : '패스키 등록 시작'}
               </button>
               <p className="mt-3 text-xs leading-5 text-stone-500">선택한 종류에 맞춰 브라우저에 인증기를 요청합니다. Google 비밀번호 관리자/이 기기는 USB 키 대신 PC의 인증 방식을 우선하고, 외장 USB 보안 키를 선택하면 보안 키를 요청합니다. 실제 저장·동기화 방식은 Chrome과 Windows 설정에 따라 달라질 수 있어요.</p>
             </div>
