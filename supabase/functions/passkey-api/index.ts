@@ -260,8 +260,11 @@ Deno.serve(async (req:Request) => {
   }
   if(action==="logout") {
    const token=req.headers.get("x-passkey-session")??"";
-   if(token) await db.from("ex1_passkey_sessions").update({revoked_at:new Date().toISOString()}).eq("token_hash",await sha256(token)).is("revoked_at",null);
-   return json({ok:true});
+   if(!token) return json({ok:true,revoked:false});
+   const {data:revoked,error}=await db.from("ex1_passkey_sessions").update({revoked_at:new Date().toISOString()}).eq("token_hash",await sha256(token)).is("revoked_at",null).select("account_id").maybeSingle();
+   if(error) return json({error:"logout_failed"},500);
+   if(revoked) await log("logout-session-revoked",200,revoked.account_id,null,{sessionTokenRedacted:true,revoked:true});
+   return json({ok:true,revoked:Boolean(revoked)});
   }
   if(action==="private") {
    const session=await getSession(req);
