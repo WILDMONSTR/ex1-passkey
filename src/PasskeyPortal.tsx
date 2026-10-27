@@ -256,7 +256,10 @@ export function PasskeyPortal() {
           try { await api('register-cancel', { challenge: activeRegistration.challenge }); } catch { /* challenge가 이미 사용되었을 수 있음 */ }
         }
         setPendingRegistration(null);
-        setMessage(messageText);
+        const browserErrorName = error instanceof Error ? error.name : '';
+        setMessage(browserPromptStarted && browserErrorName === 'NotAllowedError'
+          ? '패스키 등록 창이 취소되었거나 인증기가 요청을 완료하지 못했어요. 이 시도에서는 서버에 패스키가 저장되지 않았어요. 다시 시도할 수 있어요.'
+          : messageText);
         setMessageKind('error');
       }
     } finally {
@@ -356,7 +359,10 @@ export function PasskeyPortal() {
           try { await api('add-passkey-cancel', { challenge: activeRegistration.challenge }, session); } catch { /* challenge may already be consumed */ }
         }
         setPendingAdditionalRegistration(null);
-        setMessage(messageText);
+        const browserErrorName = error instanceof Error ? error.name : '';
+        setMessage(browserPromptStarted && browserErrorName === 'NotAllowedError'
+          ? '추가 패스키 등록 창이 취소되었거나 인증기가 요청을 완료하지 못했어요. 이 시도에서는 서버에 패스키가 저장되지 않았어요. 다시 시도할 수 있어요.'
+          : messageText);
         setMessageKind('error');
       }
     } finally {
