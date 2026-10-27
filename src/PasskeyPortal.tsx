@@ -112,7 +112,7 @@ function errorMessage(error: unknown) {
 export function PasskeyPortal() {
   const [registerUsername, setRegisterUsername] = useState('');
   const [passkeyName, setPasskeyName] = useState('내 기기 패스키');
-  const [savedLocation, setSavedLocation] = useState('unknown');
+  const [savedLocation, setSavedLocation] = useState('google-password-manager');
   const [loginUsername, setLoginUsername] = useState('');
   const [session, setSession] = useState<string | null>(() => {
     try { return sessionStorage.getItem('ex1-passkey-session'); } catch { return null; }
@@ -166,7 +166,7 @@ export function PasskeyPortal() {
       if (!window.isSecureContext || !navigator.credentials || !window.PublicKeyCredential) {
         throw new Error('이 브라우저에서 패스키를 사용할 수 없어요. HTTPS 공식 배포 주소와 최신 브라우저를 사용하세요.');
       }
-      const optionsResult = await api('register-options', { username: registerUsername.trim() });
+      const optionsResult = await api('register-options', { username: registerUsername.trim(), savedLocation });
       challenge = String(optionsResult.challenge || '');
       const options = optionsResult.options;
       const publicKey: PublicKeyCredentialCreationOptions = {
@@ -308,17 +308,17 @@ export function PasskeyPortal() {
               <input id="register-username" autoComplete="username" value={registerUsername} onChange={(e) => setRegisterUsername(e.target.value)} maxLength={32} placeholder="예: student_a" className="mb-3 w-full rounded-lg border border-stone-300 px-3 py-2.5 text-sm outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100" />
               <label className="mb-1 block text-sm font-medium text-stone-700" htmlFor="passkey-name">패스키 이름</label>
               <input id="passkey-name" value={passkeyName} onChange={(e) => setPasskeyName(e.target.value)} maxLength={80} placeholder="예: 내 노트북" className="mb-3 w-full rounded-lg border border-stone-300 px-3 py-2.5 text-sm outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100" />
-              <label className="mb-1 block text-sm font-medium text-stone-700" htmlFor="saved-location">패스키 저장 위치(선택)</label>
+              <label className="mb-1 block text-sm font-medium text-stone-700" htmlFor="saved-location">패스키 등록 방식(선택)</label>
               <select id="saved-location" value={savedLocation} onChange={(e) => setSavedLocation(e.target.value)} className="mb-4 w-full rounded-lg border border-stone-300 bg-white px-3 py-2.5 text-sm outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100">
-                <option value="unknown">잘 모르겠어요</option>
-                <option value="google-password-manager">Google 비밀번호 관리자</option>
-                <option value="device">이 기기</option>
-                <option value="security-key">외장 보안 키</option>
+                <option value="google-password-manager">Google 비밀번호 관리자 (Chrome)</option>
+                <option value="device">이 기기 (Windows Hello 등)</option>
+                <option value="security-key">외장 USB 보안 키</option>
+                <option value="unknown">잘 모르겠어요 (이 기기 우선)</option>
               </select>
               <button type="button" disabled={busy || registerUsername.trim().length < 3} onClick={() => void registerPasskey()} className="w-full rounded-lg bg-emerald-700 px-4 py-3 text-sm font-bold text-white transition hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-50">
                 {busy ? '처리 중…' : '패스키 등록 시작'}
               </button>
-              <p className="mt-3 text-xs leading-5 text-stone-500">누르면 브라우저 또는 기기의 패스키 생성 창이 열립니다. 여기서 일반 비밀번호를 입력하는 것이 아니라 지문·얼굴·기기 PIN 등의 인증 방법을 사용합니다.</p>
+              <p className="mt-3 text-xs leading-5 text-stone-500">선택한 종류에 맞춰 브라우저에 인증기를 요청합니다. Google 비밀번호 관리자/이 기기는 USB 키 대신 PC의 인증 방식을 우선하고, 외장 USB 보안 키를 선택하면 보안 키를 요청합니다. 실제 저장·동기화 방식은 Chrome과 Windows 설정에 따라 달라질 수 있어요.</p>
             </div>
 
             <div className="rounded-2xl bg-white p-5 shadow-sm ring-1 ring-sky-200 sm:p-6">
