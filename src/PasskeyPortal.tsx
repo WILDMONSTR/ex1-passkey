@@ -127,6 +127,9 @@ export function PasskeyPortal() {
   const [items, setItems] = useState<PrivateItem[]>([]);
   const [events, setEvents] = useState<AuditEvent[]>([]);
   const [pendingRegistration, setPendingRegistration] = useState<PendingRegistration | null>(null);
+  const [additionalPasskeyName, setAdditionalPasskeyName] = useState('내 두 번째 기기 패스키');
+  const [additionalSavedLocation, setAdditionalSavedLocation] = useState('google-password-manager');
+  const [pendingAdditionalRegistration, setPendingAdditionalRegistration] = useState<PendingRegistration | null>(null);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
   const [messageKind, setMessageKind] = useState<'info' | 'error' | 'success'>('info');
@@ -253,6 +256,106 @@ export function PasskeyPortal() {
           try { await api('register-cancel', { challenge: activeRegistration.challenge }); } catch { /* challenge가 이미 사용되었을 수 있음 */ }
         }
         setPendingRegistration(null);
+        setMessage(messageText);
+        setMessageKind('error');
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function addPasskey() {
+    if (!session) {
+      setMessage('먼저 기존 패스키로 로그인하세요.');
+      setMessageKind('error');
+      return;
+    }
+    setBusy(true);
+    setMessage('');
+    let activeRegistration: PendingRegistration | null = pendingAdditionalRegistration;
+    let browserPromptStarted = false;
+    try {
+      if (!window.isSecureContext || !navigator.credentials || !window.PublicKeyCredential) {
+        throw new Error('이 브라우저에서 패스키를 사용할 수 없어요. HTTPS 공식 배포 주소와 최신 브라우저를 사용하세요.');
+      }
+
+      if (!activeRegistration) {
+        const optionsResult = await api('add-passkey-options', {
+          savedLocation: additionalSavedLocation,
+          name: additionalPasskeyName.trim() || `추가 패스키 ${passkeys.length + 1}`,
+        }, session);
+        const options = optionsResult.options;
+        const publicKey: PublicKeyCredentialCreationOptions = {
+          ...options,
+          challenge: fromBase64Url(options.challenge),
+          user: { ...options.user, id: fromBase64Url(options.user.id) },
+          excludeCredentials: (options.excludeCredentials || []).map((item: { id: string; type: PublicKeyCredentialType; transports?: AuthenticatorTransport[] }) => ({
+            ...item,
+            id: fromBase64Url(item.id),
+          })),
+        };
+        activeRegistration = { challenge: String(optionsResult.challenge || ''), publicKey };
+        setPendingAdditionalRegistration(activeRegistration);
+      }
+
+      if (!document.hasFocus()) {
+        setMessage('추가 패스키 등록 준비가 완료됐어요. Chrome 창과 이 탭을 활성화한 뒤 “추가 패스키 생성 계속”을 눌러 주세요.');
+        setMessageKind('info');
+        return;
+      }
+
+      browserPromptStarted = true;
+      let credential: Credential | null;
+      try {
+        credential = await navigator.credentials.create({ publicKey: activeRegistration.publicKey });
+      } catch (browserError) {
+        let platformAuthenticatorAvailable: boolean | null = null;
+        try {
+          if (typeof PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable === 'function') {
+            platformAuthenticatorAvailable = await PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable();
+          }
+        } catch { /* diagnostics must not mask the original registration error */ }
+        const creationOptions = activeRegistration.publicKey as PublicKeyCredentialCreationOptions & { hints?: string[] };
+        const errorName = browserError instanceof Error ? browserError.name : 'Other';
+        try {
+          await api('browser-diagnostic', {
+            errorName,
+            selectedLocation: additionalSavedLocation,
+            authenticatorAttachment: creationOptions.authenticatorSelection?.authenticatorAttachment ?? 'unset',
+            residentKey: creationOptions.authenticatorSelection?.residentKey ?? 'unset',
+            userVerification: creationOptions.authenticatorSelection?.userVerification ?? 'unset',
+            hints: Array.isArray(creationOptions.hints) ? creationOptions.hints : [],
+            isSecureContext: window.isSecureContext,
+            credentialsApiAvailable: Boolean(navigator.credentials && window.PublicKeyCredential),
+            platformAuthenticatorAvailable,
+          }, session);
+        } catch { /* reporting failure must not mask the original registration error */ }
+        throw browserError;
+      }
+      if (!(credential instanceof PublicKeyCredential)) throw new Error('브라우저에서 추가 패스키 등록이 완료되지 않았어요.');
+
+      await api('add-passkey-verify', {
+        challenge: activeRegistration.challenge,
+        credential: registrationCredentialJSON(credential),
+        name: additionalPasskeyName.trim() || `추가 패스키 ${passkeys.length + 1}`,
+        savedLocation: additionalSavedLocation,
+      }, session);
+      setPendingAdditionalRegistration(null);
+      await loadPrivateArea(session);
+      setMessage('추가 패스키가 등록됐어요. 서버에는 공개키만 저장됐으며 개인키는 전송되지 않았어요.');
+      setMessageKind('success');
+    } catch (error) {
+      const messageText = errorMessage(error);
+      const focusError = /does not have focus|page does not have focus/i.test(messageText);
+      if (activeRegistration && focusError) {
+        setPendingAdditionalRegistration(activeRegistration);
+        setMessage('Chrome이 페이지 포커스를 잃어 추가 패스키 창을 열지 못했어요. 이 웹페이지를 활성화한 뒤 “추가 패스키 생성 계속”을 눌러 주세요.');
+        setMessageKind('error');
+      } else {
+        if (activeRegistration && browserPromptStarted) {
+          try { await api('add-passkey-cancel', { challenge: activeRegistration.challenge }, session); } catch { /* challenge may already be consumed */ }
+        }
+        setPendingAdditionalRegistration(null);
         setMessage(messageText);
         setMessageKind('error');
       }
@@ -419,6 +522,23 @@ export function PasskeyPortal() {
                 <div className="rounded-2xl bg-white p-5 shadow-sm ring-1 ring-stone-200">
                   <h3 className="mb-3 font-bold text-stone-900">등록된 패스키 <span className="text-xs font-normal text-stone-500">({passkeys.length}개)</span></h3>
                   {passkeys.length ? <ul className="space-y-3">{passkeys.map((key) => <li key={key.id} className="rounded-xl border border-stone-200 p-3"><div className="flex items-start justify-between gap-3"><div><p className="text-sm font-semibold text-stone-900">{key.name}</p><p className="mt-1 text-xs text-stone-500">등록일: {new Date(key.created_at).toLocaleString('ko-KR')}</p><p className="text-xs text-stone-500">저장 위치 표기: {key.saved_location}</p></div><button type="button" disabled={busy} onClick={() => void deletePasskey(key.id)} className="rounded-md border border-rose-200 px-2.5 py-1.5 text-xs font-semibold text-rose-700 hover:bg-rose-50 disabled:opacity-50">삭제</button></div></li>)}</ul> : <p className="text-sm text-stone-500">등록된 패스키가 없어요.</p>}
+                </div>
+
+                <div className="rounded-2xl bg-white p-5 shadow-sm ring-1 ring-sky-200">
+                  <h3 className="mb-3 font-bold text-stone-900">이 계정에 패스키 추가</h3>
+                  <p className="mb-3 text-xs leading-5 text-stone-600">로그인된 계정에 두 번째 패스키를 등록할 수 있어요. USB 보안 키가 없다면 Google 비밀번호 관리자 또는 사용 가능한 기기 내 인증기를 선택하세요.</p>
+                  <label className="mb-1 block text-sm font-medium text-stone-700" htmlFor="additional-passkey-name">추가 패스키 이름</label>
+                  <input id="additional-passkey-name" disabled={busy || !!pendingAdditionalRegistration} value={additionalPasskeyName} onChange={(e) => setAdditionalPasskeyName(e.target.value)} maxLength={80} className="mb-3 w-full rounded-lg border border-stone-300 px-3 py-2.5 text-sm outline-none focus:border-sky-500 focus:ring-2 focus:ring-sky-100" />
+                  <label className="mb-1 block text-sm font-medium text-stone-700" htmlFor="additional-saved-location">저장할 인증기</label>
+                  <select id="additional-saved-location" disabled={busy || !!pendingAdditionalRegistration} value={additionalSavedLocation} onChange={(e) => setAdditionalSavedLocation(e.target.value)} className="mb-4 w-full rounded-lg border border-stone-300 bg-white px-3 py-2.5 text-sm outline-none focus:border-sky-500 focus:ring-2 focus:ring-sky-100">
+                    <option value="google-password-manager">Google 비밀번호 관리자 우선 (Chrome)</option>
+                    <option value="device">이 PC의 인증기 우선 (Windows Hello 등)</option>
+                    <option value="security-key">외장 USB 보안 키</option>
+                    <option value="unknown">잘 모르겠어요 (이 기기 우선)</option>
+                  </select>
+                  <button type="button" onClick={() => void addPasskey()} disabled={busy} className="w-full rounded-lg bg-sky-700 px-4 py-3 text-sm font-bold text-white transition hover:bg-sky-800 disabled:cursor-not-allowed disabled:opacity-50">
+                    {busy ? '처리 중…' : pendingAdditionalRegistration ? '추가 패스키 생성 계속' : '추가 패스키 등록'}
+                  </button>
                 </div>
 
                 <div className="rounded-2xl bg-white p-5 shadow-sm ring-1 ring-stone-200">
