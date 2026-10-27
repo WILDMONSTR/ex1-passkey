@@ -159,7 +159,7 @@ Deno.serve(async (req:Request) => {
     hints:(options.hints??[]).filter((hint)=>["client-device","hybrid","security-key"].includes(hint)),
     userDisplayNameSet:Boolean(options.user.displayName)
    };
-   const ch=await issueChallenge("registration-add",account.id,{username:account.username,userHandle:account.user_handle,name:String(body.name??"추가 패스키").slice(0,80),savedLocation:requestedLocation,diagnosticSettings});
+   const ch=await issueChallenge("add-passkey",account.id,{username:account.username,userHandle:account.user_handle,name:String(body.name??"추가 패스키").slice(0,80),savedLocation:requestedLocation,diagnosticSettings});
    await log("passkey-add-options-issued",200,account.id,null,diagnosticSettings);
    return json({options:{...options,challenge:ch.challenge},challenge:ch.challenge});
   }
@@ -167,7 +167,7 @@ Deno.serve(async (req:Request) => {
    const session=await getSession(req);
    if(!session) return json({error:"unauthorized"},401);
    const challenge=String(body.challenge??"");
-   const ch=await consumeChallenge(challenge,"registration-add",session.account_id);
+   const ch=await consumeChallenge(challenge,"add-passkey",session.account_id);
    if(!ch) return json({error:"challenge_invalid_or_used",stored:false},409);
    const meta=(ch.metadata??{}) as Record<string,unknown>;
    const diagnosticSettings=meta.diagnosticSettings&&typeof meta.diagnosticSettings==="object"?meta.diagnosticSettings as Record<string,unknown>:{};
@@ -178,7 +178,7 @@ Deno.serve(async (req:Request) => {
    const session=await getSession(req);
    if(!session) return json({error:"unauthorized"},401);
    const {challenge,credential,name,savedLocation}=body;
-   const ch=await consumeChallenge(String(challenge??""),"registration-add",session.account_id);
+   const ch=await consumeChallenge(String(challenge??""),"add-passkey",session.account_id);
    if(!ch) { await log("passkey-add-challenge-rejected",409,session.account_id,null,{stored:false}); return json({error:"challenge_invalid_or_used"},409); }
    let verification;
    try {
