@@ -116,8 +116,21 @@ function explainError(code: string) {
   return messages[code] || `요청을 처리하지 못했어요 (${code}). 다시 시도하거나 개발자 로그를 확인하세요.`;
 }
 
+function getErrorName(error: unknown): string {
+  if (typeof error === 'object' && error !== null && 'name' in error) {
+    const name = (error as { name?: unknown }).name;
+    if (typeof name === 'string') return name;
+  }
+  return error instanceof Error ? error.name : 'Other';
+}
+
 function errorMessage(error: unknown) {
-  return error instanceof Error ? error.message : '예상하지 못한 오류가 발생했어요.';
+  if (error instanceof Error) return error.message;
+  if (typeof error === 'object' && error !== null && 'message' in error) {
+    const message = (error as { message?: unknown }).message;
+    if (typeof message === 'string') return message;
+  }
+  return '예상하지 못한 오류가 발생했어요.';
 }
 
 export function PasskeyPortal() {
@@ -222,7 +235,7 @@ export function PasskeyPortal() {
           }
         } catch { /* diagnostics must not mask the original registration error */ }
         const creationOptions = activeRegistration.publicKey as PublicKeyCredentialCreationOptions & { hints?: string[] };
-        const errorName = browserError instanceof Error ? browserError.name : 'Other';
+        const errorName = getErrorName(browserError);
         try {
           await api('browser-diagnostic', {
             errorName,
@@ -263,7 +276,7 @@ export function PasskeyPortal() {
           try { await api('register-cancel', { challenge: activeRegistration.challenge }); } catch { /* challenge가 이미 사용되었을 수 있음 */ }
         }
         setPendingRegistration(null);
-        const browserErrorName = error instanceof Error ? error.name : '';
+        const browserErrorName = getErrorName(error);
         setMessage(browserPromptStarted && browserErrorName === 'NotAllowedError'
           ? '패스키 등록 창이 취소되었거나 인증기가 요청을 완료하지 못했어요. 이 시도에서는 서버에 패스키가 저장되지 않았어요. 다시 시도할 수 있어요.'
           : messageText);
@@ -326,7 +339,7 @@ export function PasskeyPortal() {
           }
         } catch { /* diagnostics must not mask the original registration error */ }
         const creationOptions = activeRegistration.publicKey as PublicKeyCredentialCreationOptions & { hints?: string[] };
-        const errorName = browserError instanceof Error ? browserError.name : 'Other';
+        const errorName = getErrorName(browserError);
         try {
           await api('browser-diagnostic', {
             errorName,
@@ -366,7 +379,7 @@ export function PasskeyPortal() {
           try { await api('add-passkey-cancel', { challenge: activeRegistration.challenge }, session); } catch { /* challenge may already be consumed */ }
         }
         setPendingAdditionalRegistration(null);
-        const browserErrorName = error instanceof Error ? error.name : '';
+        const browserErrorName = getErrorName(error);
         setMessage(browserPromptStarted && browserErrorName === 'NotAllowedError'
           ? '추가 패스키 등록 창이 취소되었거나 인증기가 요청을 완료하지 못했어요. 이 시도에서는 서버에 패스키가 저장되지 않았어요. 다시 시도할 수 있어요.'
           : messageText);
@@ -443,7 +456,7 @@ export function PasskeyPortal() {
       setSession(token);
       await loadPrivateArea(token);
     } catch (error) {
-      const errorName = error instanceof Error ? error.name : '';
+      const errorName = getErrorName(error);
       if (preferHybrid && errorName === 'NotAllowedError' && activeLogin) {
         // Keep the unconsumed challenge for a retry; no credential or session
         // was sent to the server when the browser rejected this request.
