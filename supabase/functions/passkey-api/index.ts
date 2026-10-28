@@ -134,14 +134,18 @@ Deno.serve(async (req:Request) => {
    const wantsSecurityKey=requestedLocation==="security-key";
    const prefersWindowsHello=requestedLocation==="device";
    const prefersGooglePasswordManager=requestedLocation==="google-password-manager";
-   const {data:existingCredentials}=await db.from("ex1_passkey_credentials").select("credential_id,transports").eq("account_id",account.id);
+   // This is an authenticated additional-credential flow. Do not send the
+   // account's existing credential IDs in excludeCredentials here: on Android
+   // the same Google Password Manager provider may otherwise reject creation
+   // before a second distinct credential can be generated. The verification
+   // handler still verifies the full registration response and rejects an
+   // exact credential-ID duplicate before storing it.
    const options=await generateRegistrationOptions({
     rpName:RP_NAME,
     rpID:RP_ID,
     userName:account.username,
     userDisplayName:account.username,
     userID:new TextEncoder().encode(account.user_handle),
-    excludeCredentials:(existingCredentials??[]).map(c=>({id:c.credential_id,transports:c.transports as AuthenticatorTransport[]})),
     attestationType:"none",
     authenticatorSelection:{
      residentKey:"required",
