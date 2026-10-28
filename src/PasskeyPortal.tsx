@@ -30,6 +30,12 @@ type PendingRegistration = {
   publicKey: PublicKeyCredentialCreationOptions;
 };
 
+type PendingHybridLogin = {
+  challenge: string;
+  publicKey: PublicKeyCredentialRequestOptions & { hints?: string[] };
+  createdAt: number;
+};
+
 function toBase64Url(buffer: ArrayBuffer | Uint8Array): string {
   const bytes = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
   let binary = '';
@@ -130,6 +136,7 @@ export function PasskeyPortal() {
   const [additionalPasskeyName, setAdditionalPasskeyName] = useState('내 두 번째 기기 패스키');
   const [additionalSavedLocation, setAdditionalSavedLocation] = useState('google-password-manager');
   const [pendingAdditionalRegistration, setPendingAdditionalRegistration] = useState<PendingRegistration | null>(null);
+  const [pendingHybridLogin, setPendingHybridLogin] = useState<PendingHybridLogin | null>(null);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
   const [messageKind, setMessageKind] = useState<'info' | 'error' | 'success'>('info');
@@ -370,28 +377,64 @@ export function PasskeyPortal() {
     }
   }
 
-  async function loginWithPasskey() {
+  async function loginWithPasskey(preferHybrid = false) {
     setBusy(true);
     setMessage('');
+    let activeLogin: PendingHybridLogin | null = null;
     try {
       if (!window.isSecureContext || !navigator.credentials || !window.PublicKeyCredential) {
         throw new Error('이 브라우저에서 패스키를 사용할 수 없어요. HTTPS 공식 배포 주소와 최신 브라우저를 사용하세요.');
       }
       const username = loginUsername.trim();
-      const optionsResult = await api('login-options', { username });
-      const options = optionsResult.options;
-      const publicKey: PublicKeyCredentialRequestOptions = {
-        ...options,
-        challenge: fromBase64Url(options.challenge),
-        allowCredentials: (options.allowCredentials || []).map((item: { id: string; type: PublicKeyCredentialType; transports?: AuthenticatorTransport[] }) => ({
-          ...item,
-          id: fromBase64Url(item.id),
-        })),
-      };
-      const credential = await navigator.credentials.get({ publicKey });
+      if (preferHybrid) {
+        activeLogin = pendingHybridLogin;
+        // Keep a fresh request ready for the second click so the WebAuthn prompt
+        // opens directly from the user's click, without an intervening network wait.
+        if (!activeLogin || Date.now() - activeLogin.createdAt > 4 * 60 * 1000) {
+          const optionsResult = await api('login-options', { username });
+          const options = optionsResult.options;
+          const publicKey: PendingHybridLogin['publicKey'] = {
+            ...options,
+            challenge: fromBase64Url(options.challenge),
+            allowCredentials: (options.allowCredentials || []).map((item: { id: string; type: PublicKeyCredentialType; transports?: AuthenticatorTransport[] }) => ({
+              ...item,
+              id: fromBase64Url(item.id),
+            })),
+            hints: ['hybrid', 'client-device'],
+          };
+          activeLogin = {
+            challenge: String(optionsResult.challenge || ''),
+            publicKey,
+            createdAt: Date.now(),
+          };
+          setPendingHybridLogin(activeLogin);
+          setMessage('로그인 요청을 준비했어요. 아래 버튼을 한 번 더 눌러 Chrome에서 휴대전화 등 다른 기기의 패스키 인증 창을 여세요.');
+          setMessageKind('info');
+          return;
+        }
+      } else {
+        setPendingHybridLogin(null);
+        const optionsResult = await api('login-options', { username });
+        const options = optionsResult.options;
+        activeLogin = {
+          challenge: String(optionsResult.challenge || ''),
+          createdAt: Date.now(),
+          publicKey: {
+            ...options,
+            challenge: fromBase64Url(options.challenge),
+            allowCredentials: (options.allowCredentials || []).map((item: { id: string; type: PublicKeyCredentialType; transports?: AuthenticatorTransport[] }) => ({
+              ...item,
+              id: fromBase64Url(item.id),
+            })),
+          },
+        };
+      }
+
+      const credential = await navigator.credentials.get({ publicKey: activeLogin.publicKey });
       if (!(credential instanceof PublicKeyCredential)) throw new Error('브라우저에서 패스키 인증이 완료되지 않았어요.');
+      if (preferHybrid) setPendingHybridLogin(null);
       const verified = await api('login-verify', {
-        challenge: optionsResult.challenge,
+        challenge: activeLogin.challenge,
         credential: authenticationCredentialJSON(credential),
       });
       const token = String(verified.session || '');
@@ -400,7 +443,16 @@ export function PasskeyPortal() {
       setSession(token);
       await loadPrivateArea(token);
     } catch (error) {
-      setMessage(errorMessage(error));
+      const errorName = error instanceof Error ? error.name : '';
+      if (preferHybrid && errorName === 'NotAllowedError' && activeLogin) {
+        // Keep the unconsumed challenge for a retry; no credential or session
+        // was sent to the server when the browser rejected this request.
+        setPendingHybridLogin(activeLogin);
+        setMessage('Chrome에서 휴대전화 패스키 인증이 완료되지 않았어요. QR 코드가 나타나면 휴대전화 카메라로 스캔하고, PC와 휴대전화의 Bluetooth를 켠 채 가까이 두세요. QR 없이 오류가 나면 인증 창 열기를 다시 눌러 재시도하세요.');
+      } else {
+        setPendingHybridLogin(null);
+        setMessage(errorMessage(error));
+      }
       setMessageKind('error');
     } finally {
       setBusy(false);
@@ -480,14 +532,14 @@ export function PasskeyPortal() {
               <label className="mb-1 block text-sm font-medium text-stone-700" htmlFor="saved-location">패스키 인증기 우선 선택</label>
               <select id="saved-location" disabled={busy || !!pendingRegistration} value={savedLocation} onChange={(e) => setSavedLocation(e.target.value)} className="mb-4 w-full rounded-lg border border-stone-300 bg-white px-3 py-2.5 text-sm outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100">
                 <option value="google-password-manager">Google 비밀번호 관리자 우선 (Chrome)</option>
-                <option value="device">이 PC의 인증기 우선 (Windows Hello 등)</option>
+                <option value="device">현재 기기의 플랫폼 인증기 우선</option>
                 <option value="security-key">외장 USB 보안 키</option>
                 <option value="unknown">잘 모르겠어요 (이 기기 우선)</option>
               </select>
               <button type="button" disabled={busy || registerUsername.trim().length < 3} onClick={() => void registerPasskey()} className="w-full rounded-lg bg-emerald-700 px-4 py-3 text-sm font-bold text-white transition hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-50">
                 {busy ? '처리 중…' : pendingRegistration ? '패스키 생성 계속' : '패스키 등록 시작'}
               </button>
-              <p className="mt-3 text-xs leading-5 text-stone-500">이 선택은 Chrome에 사용할 인증기의 우선순위를 안내합니다. Google 비밀번호 관리자에 저장되는 것을 강제할 수는 없으며, 가능한 인증 방식은 Chrome·Windows 설정에 따라 달라집니다. 외장 USB 보안 키를 선택한 경우에만 USB 보안 키를 우선 요청합니다.</p>
+              <p className="mt-3 text-xs leading-5 text-stone-500">이 선택은 저장 위치를 강제하지 않고 인증기의 우선순위를 안내합니다. “현재 기기”는 등록을 실행한 기기를 뜻해요. 안드로이드에서 선택해도 Windows Hello가 원격 실행되지는 않습니다. Windows PC의 인증기로 추가하려면 그 PC에서 등록하세요. USB 옵션은 실제 보안 키가 있을 때만 선택하세요.</p>
             </div>
 
             <div className="rounded-2xl bg-white p-5 shadow-sm ring-1 ring-sky-200 sm:p-6">
@@ -499,11 +551,14 @@ export function PasskeyPortal() {
                 </div>
               </div>
               <label className="mb-1 block text-sm font-medium text-stone-700" htmlFor="login-username">계정 이름</label>
-              <input id="login-username" autoComplete="username webauthn" value={loginUsername} onChange={(e) => setLoginUsername(e.target.value)} maxLength={32} placeholder="예: student_a" className="mb-4 w-full rounded-lg border border-stone-300 px-3 py-2.5 text-sm outline-none focus:border-sky-500 focus:ring-2 focus:ring-sky-100" />
+              <input id="login-username" autoComplete="username webauthn" disabled={busy || !!pendingHybridLogin} value={loginUsername} onChange={(e) => setLoginUsername(e.target.value)} maxLength={32} placeholder="예: student_a" className="mb-4 w-full rounded-lg border border-stone-300 px-3 py-2.5 text-sm outline-none focus:border-sky-500 focus:ring-2 focus:ring-sky-100" />
               <button type="button" disabled={busy || loginUsername.trim().length < 3} onClick={() => void loginWithPasskey()} className="w-full rounded-lg bg-sky-700 px-4 py-3 text-sm font-bold text-white transition hover:bg-sky-800 disabled:cursor-not-allowed disabled:opacity-50">
                 {busy ? '처리 중…' : '패스키로 로그인'}
               </button>
-              <p className="mt-3 text-xs leading-5 text-stone-500">등록 당시 사용한 기기나 동기화된 패스키를 선택하세요. 로그인에 성공해야 아래 비공개 자료가 표시됩니다.</p>
+              <button type="button" disabled={busy || loginUsername.trim().length < 3} onClick={() => void loginWithPasskey(true)} className="mt-2 w-full rounded-lg border border-sky-300 bg-white px-4 py-3 text-sm font-semibold text-sky-800 transition hover:bg-sky-50 disabled:cursor-not-allowed disabled:opacity-50">
+                {busy ? '처리 중…' : pendingHybridLogin ? '휴대전화 인증 창 열기' : '휴대전화 등 다른 기기로 로그인 (QR)'}
+              </button>
+              <p className="mt-3 text-xs leading-5 text-stone-500">PC에서 휴대전화에 저장된 패스키를 사용하려면 아래의 다른 기기 로그인 경로를 선택하세요. 첫 클릭은 요청을 준비하고, 두 번째 클릭은 네트워크 대기 없이 인증 창을 엽니다. 로그인에 성공해야 비공개 자료가 표시됩니다.</p>
             </div>
           </div>
         ) : (
@@ -532,13 +587,13 @@ export function PasskeyPortal() {
 
                 <div className="rounded-2xl bg-white p-5 shadow-sm ring-1 ring-sky-200">
                   <h3 className="mb-3 font-bold text-stone-900">이 계정에 패스키 추가</h3>
-                  <p className="mb-3 text-xs leading-5 text-stone-600">로그인된 계정에 두 번째 패스키를 등록할 수 있어요. USB 보안 키가 없다면 Google 비밀번호 관리자 또는 사용 가능한 기기 내 인증기를 선택하세요.</p>
+                  <p className="mb-3 text-xs leading-5 text-stone-600">로그인된 계정에 두 번째 패스키를 등록할 수 있어요. 이 선택은 등록을 실행한 기기의 인증기를 요청합니다. 안드로이드에서 Windows Hello를 원격으로 등록할 수는 없으므로, Windows PC의 인증기로 등록하려면 먼저 PC에서 휴대전화 패스키로 로그인하세요.</p>
                   <label className="mb-1 block text-sm font-medium text-stone-700" htmlFor="additional-passkey-name">추가 패스키 이름</label>
                   <input id="additional-passkey-name" disabled={busy || !!pendingAdditionalRegistration} value={additionalPasskeyName} onChange={(e) => setAdditionalPasskeyName(e.target.value)} maxLength={80} className="mb-3 w-full rounded-lg border border-stone-300 px-3 py-2.5 text-sm outline-none focus:border-sky-500 focus:ring-2 focus:ring-sky-100" />
                   <label className="mb-1 block text-sm font-medium text-stone-700" htmlFor="additional-saved-location">저장할 인증기</label>
                   <select id="additional-saved-location" disabled={busy || !!pendingAdditionalRegistration} value={additionalSavedLocation} onChange={(e) => setAdditionalSavedLocation(e.target.value)} className="mb-4 w-full rounded-lg border border-stone-300 bg-white px-3 py-2.5 text-sm outline-none focus:border-sky-500 focus:ring-2 focus:ring-sky-100">
                     <option value="google-password-manager">Google 비밀번호 관리자 우선 (Chrome)</option>
-                    <option value="device">이 PC의 인증기 우선 (Windows Hello 등)</option>
+                    <option value="device">현재 기기의 플랫폼 인증기 우선</option>
                     <option value="security-key">외장 USB 보안 키</option>
                     <option value="unknown">잘 모르겠어요 (이 기기 우선)</option>
                   </select>
